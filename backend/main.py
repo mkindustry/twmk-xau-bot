@@ -242,6 +242,11 @@ class SemiAutoApprovalRequest(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "TWMK XAU Intel Bot"}
+
+
 @app.get("/health")
 async def health():
     return {
