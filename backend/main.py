@@ -5,6 +5,7 @@ Main application entry point. Provides all REST endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
