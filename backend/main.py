@@ -80,10 +80,14 @@ async def lifespan(app: FastAPI):
     global config, news_engine, twitter_engine, macro_analyzer
     global signal_engine, risk_manager, telegram, kill_switch_active
 
-    config = load_config()
+    try:
+        config = load_config()
+    except Exception as e:
+        logger.error(f"Config load failed: {e}")
+        config = {}
     kill_switch_active = config.get("bot", {}).get("kill_switch", False)
 
-    # Telegram
+    # Telegram — fire and forget, never block startup
     tg_cfg = config.get("telegram", {})
     telegram = TelegramAlerter(
         bot_token=tg_cfg.get("bot_token", ""),
@@ -91,13 +95,13 @@ async def lifespan(app: FastAPI):
     )
     await telegram.start()
 
-    # News Engine
+    # News Engine — start background polling, don't await initial fetch
     news_engine = NewsEngine(config, telegram)
-    await news_engine.start()
+    asyncio.create_task(news_engine.start())
 
-    # Twitter Engine
+    # Twitter Engine — start background polling
     twitter_engine = TwitterEngine(config, telegram)
-    await twitter_engine.start()
+    asyncio.create_task(twitter_engine.start())
 
     # Macro Analyzer
     macro_analyzer = MacroAnalyzer(news_engine, twitter_engine, config)
@@ -106,19 +110,26 @@ async def lifespan(app: FastAPI):
     signal_engine = SignalEngine(config, macro_analyzer, news_engine, twitter_engine)
 
     # Risk Manager
-    risk_manager = RiskManager(config, config["backend"]["trade_journal"])
+    try:
+        risk_manager = RiskManager(config, config.get("backend", {}).get("trade_journal", "data/trade_journal.csv"))
+    except Exception as e:
+        logger.error(f"RiskManager init failed: {e}")
 
-    await telegram.alert_system(
-        f"Bot started ✅\nMode: {config['bot']['mode']}\n"
-        f"Paper Trading: {config['bot']['paper_trading']}"
+    asyncio.create_task(
+        telegram.alert_system(
+            f"Bot started ✅\nMode: {config.get('bot', {}).get('mode', 'alert_only')}\n"
+            f"Paper Trading: {config.get('bot', {}).get('paper_trading', True)}"
+        )
     )
     logger.info("TRADESWITHMK XAU INTEL BOT started")
 
     yield
 
     await telegram.stop()
-    await news_engine.stop()
-    await twitter_engine.stop()
+    if news_engine:
+        await news_engine.stop()
+    if twitter_engine:
+        await twitter_engine.stop()
     logger.info("Bot stopped")
 
 
