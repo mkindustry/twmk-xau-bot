@@ -273,9 +273,6 @@ class NewsEngine:
         after_min = self.news_cfg.get("blackout_after_minutes", 20)
         high_impact = self.news_cfg.get("high_impact_events", [])
 
-        async with asyncio.Lock():
-            pass  # just a pattern — not actually async here
-
         for event in self.events:
             if event.impact != "HIGH":
                 continue
