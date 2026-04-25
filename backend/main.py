@@ -116,11 +116,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"RiskManager init failed: {e}")
 
-    asyncio.create_task(
-        telegram.alert_system(
-            f"Bot started ✅\nMode: {config.get('bot', {}).get('mode', 'alert_only')}\n"
-            f"Paper Trading: {config.get('bot', {}).get('paper_trading', True)}"
-        )
+    telegram.alert_system(
+        f"Bot started ✅\nMode: {config.get('bot', {}).get('mode', 'alert_only')}\n"
+        f"Paper Trading: {config.get('bot', {}).get('paper_trading', True)}"
     )
     logger.info("TRADESWITHMK XAU INTEL BOT started")
 
