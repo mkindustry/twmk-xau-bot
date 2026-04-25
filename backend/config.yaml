@@ -1,0 +1,217 @@
+# ============================================================
+# TRADESWITHMK XAU INTEL BOT — Configuration
+# ============================================================
+
+bot:
+  name: "TRADESWITHMK XAU INTEL BOT"
+  version: "1.0.0"
+  symbol: "XAUUSD"
+  mode: "alert_only"          # alert_only | semi_auto | full_auto
+  paper_trading: true         # true = no real orders sent
+  kill_switch: false          # true = immediately halt all trading
+
+# ── Risk Management ─────────────────────────────────────────
+risk:
+  risk_per_trade: 0.5         # % of account balance per trade
+  max_daily_loss: 2.0         # % — hard stop for the day
+  max_daily_profit: 4.0       # % — lock profits, stop trading
+  max_trades_per_day: 6
+  max_consecutive_losses: 3
+  cooldown_after_loss_minutes: 30
+  max_spread_points: 35       # max allowed spread in points (3.5 pip)
+  max_slippage_points: 20
+  break_even_at_r: 1.0        # move SL to BE after 1R
+  partial_tp_percent: 50      # close 50% at TP1
+  trailing_stop_after_tp1: true
+
+# ── Confluence Score Thresholds ──────────────────────────────
+confluence:
+  min_score_to_trade: 75
+  min_score_alert_only: 60
+  min_score_priority: 85
+  weights:
+    market_structure: 20
+    ema_alignment: 15
+    atr_volatility: 10
+    valid_session: 10
+    liquidity_sweep: 15
+    fvg_order_block: 15
+    macro_news_sentiment: 15
+
+# ── Sessions (UTC) ───────────────────────────────────────────
+sessions:
+  asian:
+    start: "00:00"
+    end: "08:00"
+    enabled: false            # range detection only
+  london:
+    start: "07:00"
+    end: "12:00"
+    enabled: true
+  new_york:
+    start: "12:00"
+    end: "17:00"
+    enabled: true
+  london_ny_overlap:
+    start: "12:00"
+    end: "15:00"
+    priority: true
+  killzones:
+    london_open: ["07:00", "09:00"]
+    ny_open:     ["12:00", "14:00"]
+    london_close: ["15:00", "16:00"]
+
+# ── News Filter ──────────────────────────────────────────────
+news:
+  enabled: true
+  blackout_before_minutes: 20
+  blackout_after_minutes: 20
+  reaction_mode_enabled: false  # allow trades on big surprises
+  high_impact_events:
+    - "CPI"
+    - "PPI"
+    - "NFP"
+    - "Non-Farm Payrolls"
+    - "Unemployment Rate"
+    - "FOMC"
+    - "Fed Interest Rate"
+    - "Powell"
+    - "Fed Chair"
+    - "GDP"
+    - "Retail Sales"
+    - "ISM PMI"
+    - "Jobless Claims"
+    - "Core PCE"
+    - "Consumer Confidence"
+    - "ADP Employment"
+    - "Durable Goods"
+  currencies_to_watch: ["USD", "XAU"]
+
+# ── Technical Parameters ─────────────────────────────────────
+technical:
+  ema_fast: 8
+  ema_mid: 21
+  ema_slow: 55
+  adx_min: 20
+  atr_period: 14
+  atr_spike_multiplier: 2.0   # spike = candle > X * ATR
+  round_number_zone_points: 150  # 15 pip zone around round numbers
+  asian_range_min_points: 100
+  fvg_min_size_points: 50
+
+# ── Strategies ───────────────────────────────────────────────
+strategies:
+  ema_stack_scalper: true
+  spike_scalper: true
+  round_number_reactor: true
+  london_liquidity_sweep: true
+  asian_range_breakout: true
+  ict_logic: true
+  dxy_as_confirmation_only: true  # DXY never primary trigger
+
+# ── ICT Parameters ───────────────────────────────────────────
+ict:
+  use_bos: true               # Break of Structure
+  use_choch: true             # Change of Character
+  use_fvg: true               # Fair Value Gap
+  use_order_block: true
+  use_liquidity_sweep: true
+  use_premium_discount: true
+  min_confluence_factors: 2   # min ICT factors required
+
+# ── Telegram ─────────────────────────────────────────────────
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
+  send_setup_alerts: true
+  send_trade_alerts: true
+  send_macro_alerts: true
+  send_tweet_alerts: true
+  send_risk_alerts: true
+  min_tweet_impact_to_alert: 70
+
+# ── Twitter / X Accounts ─────────────────────────────────────
+twitter:
+  enabled: true
+  bearer_token: "${X_BEARER_TOKEN}"
+  api_key: "${X_API_KEY}"
+  api_secret: "${X_API_SECRET}"
+  access_token: "${X_ACCESS_TOKEN}"
+  access_token_secret: "${X_ACCESS_TOKEN_SECRET}"
+  poll_interval_seconds: 60
+  accounts_to_watch:
+    - "federalreserve"
+    - "USTreasury"
+    - "WhiteHouse"
+    - "realDonaldTrump"
+    - "POTUS"
+    - "zerohedge"
+    - "financialjuice"
+    - "firstsquawk"
+    - "DeItaone"
+    - "elerianm"
+    - "KobeissiLetter"
+    - "markets"
+    - "WSJmarkets"
+    - "BloombergMarkets"
+  impact_keywords:
+    high:
+      - "rate hike"
+      - "rate cut"
+      - "emergency"
+      - "crisis"
+      - "war"
+      - "nuclear"
+      - "sanctions"
+      - "inflation"
+      - "recession"
+      - "default"
+      - "collapse"
+      - "tariff"
+      - "trade war"
+      - "Fed"
+      - "FOMC"
+      - "Powell"
+    medium:
+      - "GDP"
+      - "jobs"
+      - "unemployment"
+      - "CPI"
+      - "gold"
+      - "dollar"
+      - "yields"
+      - "treasury"
+      - "China"
+      - "Middle East"
+      - "oil"
+    low:
+      - "market"
+      - "economy"
+      - "stocks"
+      - "bonds"
+
+# ── News API Keys ─────────────────────────────────────────────
+apis:
+  trading_economics_key: "${TRADING_ECONOMICS_KEY}"
+  finnhub_key: "${FINNHUB_KEY}"
+  benzinga_key: "${BENZINGA_KEY}"
+  openai_key: "${OPENAI_API_KEY}"   # optional — for AI reasoning
+
+# ── Backend ───────────────────────────────────────────────────
+backend:
+  host: "0.0.0.0"
+  port: 8000
+  mt5_host: "127.0.0.1"
+  mt5_port: 8001
+  log_level: "INFO"
+  log_file: "logs/bot.log"
+  trade_journal: "data/trade_journal.csv"
+  signal_history: "data/signals.json"
+
+# ── Paper / Backtest ─────────────────────────────────────────
+backtest:
+  enabled: false
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_balance: 10000
+  spread_points: 20

@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: twmk-xau-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: FINNHUB_KEY
+        sync: false
+      - key: TRADING_ECONOMICS_KEY
+        sync: false
+      - key: X_BEARER_TOKEN
+        sync: false
+      - key: X_API_KEY
+        sync: false
+      - key: X_API_SECRET
+        sync: false
+      - key: API_AUTH_TOKEN
+        sync: false

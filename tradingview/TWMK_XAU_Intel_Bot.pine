@@ -1,0 +1,630 @@
+// ═══════════════════════════════════════════════════════════════════
+// TRADESWITHMK XAU INTEL BOT — TradingView Indicator
+// Pine Script v6
+// ─────────────────────────────────────────────────────────────────
+// Strategies : EMA Stack | Spike | Round Numbers | London Sweep
+//              Asian Range Breakout | ICT Confluence
+// Features   : BOS/CHoCH | FVG | Order Block | Liquidity Sweep
+//              Sessions | Killzones | Asian Range | Confluence Score
+//              Dashboard | TP/SL levels | 14 Alert Conditions
+// ─────────────────────────────────────────────────────────────────
+// NOTE : Macro/News score (15 pts) handled by Python backend.
+//        Max TV score = 85/100.  Full 100 with backend webhook.
+//        DXY = confirmation filter ONLY, never primary trigger.
+// ═══════════════════════════════════════════════════════════════════
+//@version=6
+indicator("TRADESWITHMK XAU INTEL BOT", shorttitle="TWMK XAU",
+          overlay=true, max_boxes_count=500, max_lines_count=500,
+          max_labels_count=500, max_bars_back=500)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── INPUTS
+// ═══════════════════════════════════════════════════════════════════
+
+// EMA Stack
+ema_fast_len    = input.int(8,    "EMA Fast",               group="EMA Stack")
+ema_mid_len     = input.int(21,   "EMA Mid",                group="EMA Stack")
+ema_slow_len    = input.int(55,   "EMA Slow",               group="EMA Stack")
+show_emas       = input.bool(true, "Show EMAs",              group="EMA Stack")
+
+// Indicators
+adx_len         = input.int(14,    "ADX Period",             group="Indicators")
+adx_min         = input.float(20.0, "ADX Minimum",           group="Indicators", step=0.5)
+atr_len         = input.int(14,    "ATR Period",             group="Indicators")
+atr_sl_mult     = input.float(1.5, "ATR × SL",              group="Indicators", step=0.1)
+atr_tp1_mult    = input.float(1.5, "ATR × TP1",             group="Indicators", step=0.1)
+atr_tp2_mult    = input.float(3.0, "ATR × TP2",             group="Indicators", step=0.1)
+atr_tp3_mult    = input.float(5.0, "ATR × TP3",             group="Indicators", step=0.1)
+spike_mult      = input.float(2.0, "Spike ATR Multiplier",   group="Indicators", step=0.1)
+
+// Confluence Thresholds
+min_score_alert = input.int(60, "Min Score — Alert",         group="Confluence", minval=0, maxval=100)
+min_score_trade = input.int(75, "Min Score — Execute",       group="Confluence", minval=0, maxval=100)
+min_score_prio  = input.int(85, "Min Score — Priority",      group="Confluence", minval=0, maxval=100)
+
+// Sessions
+show_sessions   = input.bool(true, "Show Session Backgrounds", group="Sessions")
+show_kz         = input.bool(true, "Highlight Killzones",      group="Sessions")
+
+// ICT
+show_fvg        = input.bool(true,  "Show FVG Zones",          group="ICT")
+show_ob         = input.bool(true,  "Show Order Blocks",        group="ICT")
+show_sweep      = input.bool(true,  "Show Liquidity Sweeps",    group="ICT")
+show_bos_choch  = input.bool(true,  "Show BOS / CHoCH Labels",  group="ICT")
+fvg_min_pts     = input.float(3.0,  "FVG Min Size (pts)",       group="ICT", step=0.5)
+
+// Asian Range
+show_asian_rng  = input.bool(true,  "Show Asian Range",         group="Asian Range")
+
+// Round Numbers
+show_round_lvl  = input.bool(true,  "Show Round Number Levels", group="Round Numbers")
+round_step      = input.float(50.0, "Round Number Step ($)",    group="Round Numbers", step=10.0)
+
+// Display
+show_signals    = input.bool(true,  "Show Signal Labels",       group="Display")
+show_tp_sl      = input.bool(true,  "Show TP/SL Lines",         group="Display")
+show_dashboard  = input.bool(true,  "Show Dashboard Table",     group="Display")
+
+// ═══════════════════════════════════════════════════════════════════
+// ── CORE INDICATORS
+// ═══════════════════════════════════════════════════════════════════
+
+ema8  = ta.ema(close, ema_fast_len)
+ema21 = ta.ema(close, ema_mid_len)
+ema55 = ta.ema(close, ema_slow_len)
+
+[diplus, diminus, adx_val] = ta.dmi(adx_len, adx_len)
+atr = ta.atr(atr_len)
+
+candle_body = math.abs(close - open)
+wick_high   = high - math.max(open, close)
+wick_low    = math.min(open, close) - low
+is_bull     = close > open
+is_bear     = close < open
+
+// ═══════════════════════════════════════════════════════════════════
+// ── SESSION DETECTION (UTC)
+// ═══════════════════════════════════════════════════════════════════
+
+is_asian   = not na(time(timeframe.period, "0000-0800:1234567", "UTC"))
+is_london  = not na(time(timeframe.period, "0700-1200:1234567", "UTC"))
+is_ny      = not na(time(timeframe.period, "1200-1700:1234567", "UTC"))
+is_overlap = is_london and is_ny
+
+kz_london_open  = not na(time(timeframe.period, "0700-0900:1234567", "UTC"))
+kz_ny_open      = not na(time(timeframe.period, "1200-1400:1234567", "UTC"))
+kz_london_close = not na(time(timeframe.period, "1500-1600:1234567", "UTC"))
+is_killzone     = kz_london_open or kz_ny_open or kz_london_close
+
+trading_session = is_london or is_ny or is_overlap
+
+session_name = is_overlap ? "OVERLAP" : is_london ? "LONDON" : is_ny ? "NEW YORK" : is_asian ? "ASIAN" : "CLOSED"
+
+// ═══════════════════════════════════════════════════════════════════
+// ── ASIAN RANGE
+// ═══════════════════════════════════════════════════════════════════
+
+var float asian_high = na
+var float asian_low  = na
+var bool  asian_set  = false
+
+new_day = ta.change(time("D")) != 0
+if new_day
+    asian_high := na
+    asian_low  := na
+    asian_set  := false
+
+if is_asian
+    asian_high := na(asian_high) ? high : math.max(asian_high, high)
+    asian_low  := na(asian_low)  ? low  : math.min(asian_low,  low)
+
+if not is_asian and not na(asian_high) and not na(asian_low)
+    asian_set := true
+
+asian_range_size = asian_set ? asian_high - asian_low : na
+
+// ═══════════════════════════════════════════════════════════════════
+// ── MARKET STRUCTURE: BOS / CHoCH
+// ═══════════════════════════════════════════════════════════════════
+
+ph = ta.pivothigh(high, 5, 5)
+pl = ta.pivotlow(low,  5, 5)
+
+var float last_ph       = na
+var float last_pl       = na
+var float prev_ph       = na
+var float prev_pl       = na
+var bool  last_bos_bull = false
+
+if not na(ph)
+    prev_ph := last_ph
+    last_ph := ph
+
+if not na(pl)
+    prev_pl := last_pl
+    last_pl := pl
+
+// Call unconditionally (v6 rule: series functions must run on every bar)
+_cross_ph = ta.crossover(close, last_ph)
+_cross_pl = ta.crossunder(close, last_pl)
+bos_bull  = not na(last_ph) and _cross_ph
+bos_bear  = not na(last_pl) and _cross_pl
+
+choch_bull = bos_bull and not last_bos_bull and not na(prev_ph)
+choch_bear = bos_bear and last_bos_bull      and not na(prev_pl)
+
+if bos_bull
+    last_bos_bull := true
+if bos_bear
+    last_bos_bull := false
+
+has_choch = choch_bull or choch_bear
+
+ema_stack_bull = ema8 > ema21 and ema21 > ema55
+ema_stack_bear = ema8 < ema21 and ema21 < ema55
+market_bias    = ema_stack_bull ? "BULLISH" : ema_stack_bear ? "BEARISH" : "NEUTRAL"
+
+// ═══════════════════════════════════════════════════════════════════
+// ── FAIR VALUE GAP (FVG)
+// ═══════════════════════════════════════════════════════════════════
+
+fvg_threshold = fvg_min_pts * syminfo.mintick * 100
+
+bull_fvg = low > high[2] and (low - high[2]) >= fvg_threshold
+bear_fvg = high < low[2] and (low[2] - high) >= fvg_threshold
+
+var float fvg_top     = na
+var float fvg_bot     = na
+var bool  fvg_is_bull = false
+
+if bull_fvg
+    fvg_top     := low
+    fvg_bot     := high[2]
+    fvg_is_bull := true
+
+if bear_fvg
+    fvg_top     := low[2]
+    fvg_bot     := high
+    fvg_is_bull := false
+
+price_in_fvg = not na(fvg_top) and close >= fvg_bot and close <= fvg_top
+
+// ═══════════════════════════════════════════════════════════════════
+// ── ORDER BLOCK (OB)
+// ═══════════════════════════════════════════════════════════════════
+
+bull_impulse    = is_bull and candle_body > atr * 0.6
+bear_impulse    = is_bear and candle_body > atr * 0.6
+bull_ob_trigger = bull_impulse and is_bear[1]
+bear_ob_trigger = bear_impulse and is_bull[1]
+
+var float ob_top  = na
+var float ob_bot  = na
+var bool  ob_bull = false
+
+if bull_ob_trigger
+    ob_top  := high[1]
+    ob_bot  := low[1]
+    ob_bull := true
+
+if bear_ob_trigger
+    ob_top  := high[1]
+    ob_bot  := low[1]
+    ob_bull := false
+
+has_ob      = not na(ob_top)
+price_in_ob = has_ob and close >= ob_bot and close <= ob_top
+
+// ═══════════════════════════════════════════════════════════════════
+// ── LIQUIDITY SWEEP
+// ═══════════════════════════════════════════════════════════════════
+
+// Always compute these unconditionally to avoid ternary-inside-function warnings
+highest_20 = ta.highest(high, 20)
+lowest_20  = ta.lowest(low,   20)
+
+recent_swing_high = highest_20[1]
+recent_swing_low  = lowest_20[1]
+
+sweep_asian_high = asian_set and not na(asian_high) and high > asian_high and close < asian_high
+sweep_asian_low  = asian_set and not na(asian_low)  and low  < asian_low  and close > asian_low
+sweep_swing_high = high > recent_swing_high and close < recent_swing_high
+sweep_swing_low  = low  < recent_swing_low  and close > recent_swing_low
+
+var bool   sweep_detected = false
+var string sweep_dir      = "NONE"
+var int    sweep_bar_idx  = na
+
+if sweep_asian_high or sweep_swing_high
+    sweep_detected := true
+    sweep_dir      := "HIGH"
+    sweep_bar_idx  := bar_index
+
+if sweep_asian_low or sweep_swing_low
+    sweep_detected := true
+    sweep_dir      := "LOW"
+    sweep_bar_idx  := bar_index
+
+sweep_is_fresh = not na(sweep_bar_idx) and (bar_index - sweep_bar_idx) <= 5
+has_sweep      = sweep_detected and sweep_is_fresh
+
+// ═══════════════════════════════════════════════════════════════════
+// ── PREMIUM / DISCOUNT
+// Always compute ta.highest / ta.lowest unconditionally (v6 rule)
+// ═══════════════════════════════════════════════════════════════════
+
+highest_50 = ta.highest(high, 50)
+lowest_50  = ta.lowest(low,   50)
+
+ref_high = asian_set and not na(asian_high) ? asian_high : highest_50
+ref_low  = asian_set and not na(asian_low)  ? asian_low  : lowest_50
+ref_mid  = (ref_high + ref_low) / 2.0
+ref_rng  = ref_high - ref_low
+
+is_premium  = close > ref_mid + ref_rng * 0.25
+is_discount = close < ref_mid - ref_rng * 0.25
+
+// ═══════════════════════════════════════════════════════════════════
+// ── ROUND NUMBER LEVELS
+// ═══════════════════════════════════════════════════════════════════
+
+nearest_round = math.round(close / round_step) * round_step
+dist_to_round = math.abs(close - nearest_round)
+near_round    = dist_to_round < atr * 0.5
+
+// ═══════════════════════════════════════════════════════════════════
+// ── STRATEGY CONDITIONS (all on single lines for v6 compatibility)
+// ═══════════════════════════════════════════════════════════════════
+
+// 1. EMA Stack Scalper
+ema_buy  = ema_stack_bull and adx_val >= adx_min and close >= ema21 * 0.9990 and close <= ema8 * 1.0015 and not is_premium
+ema_sell = ema_stack_bear and adx_val >= adx_min and close <= ema21 * 1.0010 and close >= ema8 * 0.9985 and not is_discount
+
+// 2. Spike Scalper
+vol_sma    = ta.sma(volume, 20)
+big_volume = volume > vol_sma * 1.5
+spike_buy  = candle_body > spike_mult * atr and is_bull and wick_low < candle_body * 0.4 and big_volume
+spike_sell = candle_body > spike_mult * atr and is_bear and wick_high < candle_body * 0.4 and big_volume
+
+// 3. Round Number Reactor
+round_buy  = near_round and wick_low > atr * 0.3 and close > nearest_round - atr * 0.4 and (bos_bull or has_choch)
+round_sell = near_round and wick_high > atr * 0.3 and close < nearest_round + atr * 0.4 and (bos_bear or has_choch)
+
+// 4. London Liquidity Sweep
+london_sweep_buy  = is_london and has_sweep and sweep_dir == "LOW"  and (bos_bull or choch_bull)
+london_sweep_sell = is_london and has_sweep and sweep_dir == "HIGH" and (bos_bear or choch_bear)
+
+// 5. Asian Range Breakout (single line — fixes v6 end-of-line error)
+asian_bo_buy  = asian_set and not na(asian_high) and close > asian_high + atr * 0.3 and ema8 > ema21
+asian_bo_sell = asian_set and not na(asian_low)  and close < asian_low  - atr * 0.3 and ema8 < ema21
+
+// 6. ICT Confluence (single-line sums — fixes v6 multiline error)
+ict_bull_pts = (has_sweep and sweep_dir == "LOW" ? 1 : 0) + (bos_bull or choch_bull ? 1 : 0) + (bull_fvg ? 1 : 0) + (has_ob and ob_bull ? 1 : 0) + (is_discount ? 1 : 0) + (is_killzone ? 1 : 0)
+ict_bear_pts = (has_sweep and sweep_dir == "HIGH" ? 1 : 0) + (bos_bear or choch_bear ? 1 : 0) + (bear_fvg ? 1 : 0) + (has_ob and not ob_bull ? 1 : 0) + (is_premium ? 1 : 0) + (is_killzone ? 1 : 0)
+
+ict_buy  = ict_bull_pts >= 2
+ict_sell = ict_bear_pts >= 2
+
+// ═══════════════════════════════════════════════════════════════════
+// ── CONFLUENCE SCORE  (max 85 pts; +15 macro from backend)
+// ═══════════════════════════════════════════════════════════════════
+
+f_score_structure(bool bull) =>
+    s = 0
+    if bull
+        if bos_bull
+            s += 15
+        if choch_bull
+            s += 5
+    else
+        if bos_bear
+            s += 15
+        if choch_bear
+            s += 5
+    math.min(s, 20)
+
+f_score_ema(bool bull) =>
+    bull ? (ema_stack_bull ? 15 : ema8 > ema21 ? 8 : 0) : (ema_stack_bear ? 15 : ema8 < ema21 ? 8 : 0)
+
+f_score_atr() =>
+    ok1 = candle_body < atr * spike_mult
+    ok2 = adx_val >= adx_min
+    ok1 and ok2 ? 10 : ok1 or ok2 ? 5 : 0
+
+f_score_session() =>
+    is_killzone ? 10 : (is_london or is_ny or is_overlap) ? 7 : 0
+
+f_score_sweep(bool bull) =>
+    bull ? ((has_sweep and sweep_dir == "LOW") ? 15 : sweep_swing_low ? 8 : 0) : ((has_sweep and sweep_dir == "HIGH") ? 15 : sweep_swing_high ? 8 : 0)
+
+f_score_fvg_ob(bool bull) =>
+    s = 0
+    if bull
+        if bull_fvg or (price_in_fvg and fvg_is_bull)
+            s += 10
+        if has_ob and ob_bull and price_in_ob
+            s += 5
+    else
+        if bear_fvg or (price_in_fvg and not fvg_is_bull)
+            s += 10
+        if has_ob and not ob_bull and price_in_ob
+            s += 5
+    math.min(s, 15)
+
+f_total_score(bool bull) =>
+    math.min(f_score_structure(bull) + f_score_ema(bull) + f_score_atr() + f_score_session() + f_score_sweep(bull) + f_score_fvg_ob(bull), 85)
+
+bull_score = f_total_score(true)
+bear_score = f_total_score(false)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── SIGNAL DECISION
+// ═══════════════════════════════════════════════════════════════════
+
+bull_votes = (ema_buy ? 1 : 0) + (spike_buy ? 1 : 0) + (round_buy ? 1 : 0) + (london_sweep_buy ? 1 : 0) + (asian_bo_buy ? 1 : 0) + (ict_buy ? 1 : 0)
+bear_votes = (ema_sell ? 1 : 0) + (spike_sell ? 1 : 0) + (round_sell ? 1 : 0) + (london_sweep_sell ? 1 : 0) + (asian_bo_sell ? 1 : 0) + (ict_sell ? 1 : 0)
+
+buy_alert  = bull_votes >= 1 and bull_score >= min_score_alert and trading_session and not is_premium
+sell_alert = bear_votes >= 1 and bear_score >= min_score_alert and trading_session and not is_discount
+
+buy_exec   = buy_alert  and bull_score >= min_score_trade
+sell_exec  = sell_alert and bear_score >= min_score_trade
+buy_prio   = buy_alert  and bull_score >= min_score_prio
+sell_prio  = sell_alert and bear_score >= min_score_prio
+
+f_strategy_tag(bool bull) =>
+    bull ? (london_sweep_buy ? "SWEEP" : ict_buy ? "ICT" : ema_buy ? "EMA" : asian_bo_buy ? "BO" : round_buy ? "ROUND" : "SPIKE") : (london_sweep_sell ? "SWEEP" : ict_sell ? "ICT" : ema_sell ? "EMA" : asian_bo_sell ? "BO" : round_sell ? "ROUND" : "SPIKE")
+
+// TP / SL
+f_buy_sl   = close - atr * atr_sl_mult
+f_buy_tp1  = close + atr * atr_tp1_mult
+f_buy_tp2  = close + atr * atr_tp2_mult
+f_buy_tp3  = close + atr * atr_tp3_mult
+f_sell_sl  = close + atr * atr_sl_mult
+f_sell_tp1 = close - atr * atr_tp1_mult
+f_sell_tp2 = close - atr * atr_tp2_mult
+f_sell_tp3 = close - atr * atr_tp3_mult
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — EMAs
+// ═══════════════════════════════════════════════════════════════════
+
+ema8_col  = ema_stack_bull ? color.new(color.lime, 0)    : ema_stack_bear ? color.new(color.red, 0)     : color.new(color.gray, 50)
+ema21_col = ema_stack_bull ? color.new(color.green, 20)  : ema_stack_bear ? color.new(color.orange, 20) : color.new(color.gray, 60)
+ema55_col = color.new(color.white, 30)
+
+plot(show_emas ? ema8  : na, "EMA 8",  color=ema8_col,  linewidth=1)
+plot(show_emas ? ema21 : na, "EMA 21", color=ema21_col, linewidth=1)
+plot(show_emas ? ema55 : na, "EMA 55", color=ema55_col, linewidth=2)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — Session Backgrounds
+// ═══════════════════════════════════════════════════════════════════
+
+bgcolor(show_sessions and is_asian   and not is_london  ? color.new(color.blue,   93) : na, title="Asian Bg")
+bgcolor(show_sessions and is_london  and not is_overlap ? color.new(color.yellow, 93) : na, title="London Bg")
+bgcolor(show_sessions and is_ny      and not is_overlap ? color.new(color.teal,   93) : na, title="NY Bg")
+bgcolor(show_sessions and is_overlap                    ? color.new(color.orange, 88) : na, title="Overlap Bg")
+bgcolor(show_kz       and is_killzone                   ? color.new(color.purple, 84) : na, title="Killzone Bg")
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — Asian Range
+// ═══════════════════════════════════════════════════════════════════
+
+plot(show_asian_rng and asian_set ? asian_high : na, "Asian High", color=color.new(color.yellow, 20), linewidth=2, style=plot.style_linebr)
+plot(show_asian_rng and asian_set ? asian_low  : na, "Asian Low",  color=color.new(color.yellow, 20), linewidth=2, style=plot.style_linebr)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — FVG Boxes
+// ═══════════════════════════════════════════════════════════════════
+
+if show_fvg and bull_fvg
+    box.new(bar_index - 2, high[2], bar_index + 20, low,  bgcolor=color.new(color.teal, 78), border_color=color.new(color.teal, 40))
+
+if show_fvg and bear_fvg
+    box.new(bar_index - 2, high,    bar_index + 20, low[2], bgcolor=color.new(color.red, 78), border_color=color.new(color.red, 40))
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — Order Block Boxes
+// ═══════════════════════════════════════════════════════════════════
+
+if show_ob and bull_ob_trigger
+    box.new(bar_index - 1, low[1], bar_index + 20, high[1], bgcolor=color.new(color.aqua, 75), border_color=color.new(color.aqua, 40))
+    label.new(bar_index - 1, low[1] - atr * 0.2, "OB", color=color.new(color.aqua, 20), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+
+if show_ob and bear_ob_trigger
+    box.new(bar_index - 1, low[1], bar_index + 20, high[1], bgcolor=color.new(color.fuchsia, 75), border_color=color.new(color.fuchsia, 40))
+    label.new(bar_index - 1, high[1] + atr * 0.2, "OB", color=color.new(color.fuchsia, 20), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — BOS / CHoCH Labels
+// ═══════════════════════════════════════════════════════════════════
+
+if show_bos_choch and bos_bull and not choch_bull
+    label.new(bar_index, low - atr * 0.4, "BOS ▲", color=color.new(color.green, 20), textcolor=color.white, style=label.style_label_up, size=size.small)
+
+if show_bos_choch and bos_bear and not choch_bear
+    label.new(bar_index, high + atr * 0.4, "BOS ▼", color=color.new(color.red, 20), textcolor=color.white, style=label.style_label_down, size=size.small)
+
+if show_bos_choch and choch_bull
+    label.new(bar_index, low - atr * 0.6, "CHoCH ▲", color=color.new(color.lime, 0), textcolor=color.black, style=label.style_label_up, size=size.normal)
+
+if show_bos_choch and choch_bear
+    label.new(bar_index, high + atr * 0.6, "CHoCH ▼", color=color.new(color.orange, 0), textcolor=color.black, style=label.style_label_down, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — Liquidity Sweeps
+// ═══════════════════════════════════════════════════════════════════
+
+if show_sweep and sweep_asian_high
+    label.new(bar_index, high + atr * 0.5, "SWEEP HIGH", color=color.new(color.red, 5), textcolor=color.white, style=label.style_label_down, size=size.small)
+
+if show_sweep and sweep_asian_low
+    label.new(bar_index, low - atr * 0.5, "SWEEP LOW", color=color.new(color.green, 5), textcolor=color.white, style=label.style_label_up, size=size.small)
+
+if show_sweep and sweep_swing_high and not sweep_asian_high
+    label.new(bar_index, high + atr * 0.3, "SWEEP", color=color.new(color.maroon, 20), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+
+if show_sweep and sweep_swing_low and not sweep_asian_low
+    label.new(bar_index, low - atr * 0.3, "SWEEP", color=color.new(color.teal, 20), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — Round Number Lines (last bar only)
+// ═══════════════════════════════════════════════════════════════════
+
+if show_round_lvl and barstate.islast
+    for i = -4 to 4
+        lvl = math.round(close / round_step) * round_step + i * round_step
+        clr = math.abs(close - lvl) < atr ? color.new(color.gray, 30) : color.new(color.gray, 65)
+        line.new(bar_index - 80, lvl, bar_index + 40, lvl, color=clr, style=line.style_dotted, width=1)
+        label.new(bar_index + 40, lvl, str.tostring(lvl, "#"), color=color.new(color.black, 60), textcolor=color.new(color.gray, 20), style=label.style_label_left, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — Signal Labels
+// ═══════════════════════════════════════════════════════════════════
+
+f_score_color(int s) =>
+    s >= min_score_prio ? color.new(color.yellow, 0) : s >= min_score_trade ? color.new(color.lime, 10) : s >= min_score_alert ? color.new(color.aqua, 20) : color.new(color.gray, 40)
+
+if show_signals and buy_alert
+    sc   = bull_score
+    txt  = "BUY " + f_strategy_tag(true) + (buy_prio ? " ★" : "") + (buy_exec ? "" : " (ALERT)") + "\n" + str.tostring(sc) + "/85"
+    label.new(bar_index, low - atr * 1.2, txt, color=f_score_color(sc), textcolor=color.black, style=label.style_label_up, size=buy_prio ? size.large : size.normal)
+
+if show_signals and sell_alert
+    sc   = bear_score
+    txt  = "SELL " + f_strategy_tag(false) + (sell_prio ? " ★" : "") + (sell_exec ? "" : " (ALERT)") + "\n" + str.tostring(sc) + "/85"
+    label.new(bar_index, high + atr * 1.2, txt, color=f_score_color(sc), textcolor=color.black, style=label.style_label_down, size=sell_prio ? size.large : size.normal)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── VISUALS — TP/SL Lines
+// ═══════════════════════════════════════════════════════════════════
+
+if show_tp_sl and buy_alert
+    n = 35
+    line.new(bar_index, f_buy_sl,  bar_index + n, f_buy_sl,  color=color.new(color.red,    10), width=1, style=line.style_dashed)
+    line.new(bar_index, f_buy_tp1, bar_index + n, f_buy_tp1, color=color.new(color.green,  30), width=1, style=line.style_dotted)
+    line.new(bar_index, f_buy_tp2, bar_index + n, f_buy_tp2, color=color.new(color.green,  10), width=1, style=line.style_dotted)
+    line.new(bar_index, f_buy_tp3, bar_index + n, f_buy_tp3, color=color.new(color.lime,    5), width=2, style=line.style_dotted)
+    label.new(bar_index + n, f_buy_sl,  "SL  " + str.tostring(f_buy_sl,  "#.##"), color=color.new(color.red,   10), textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index + n, f_buy_tp1, "TP1 " + str.tostring(f_buy_tp1, "#.##"), color=color.new(color.green, 30), textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index + n, f_buy_tp2, "TP2 " + str.tostring(f_buy_tp2, "#.##"), color=color.new(color.green, 10), textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index + n, f_buy_tp3, "TP3 " + str.tostring(f_buy_tp3, "#.##"), color=color.new(color.lime,   5), textcolor=color.black, style=label.style_label_right, size=size.tiny)
+
+if show_tp_sl and sell_alert
+    n = 35
+    line.new(bar_index, f_sell_sl,  bar_index + n, f_sell_sl,  color=color.new(color.red,    10), width=1, style=line.style_dashed)
+    line.new(bar_index, f_sell_tp1, bar_index + n, f_sell_tp1, color=color.new(color.green,  30), width=1, style=line.style_dotted)
+    line.new(bar_index, f_sell_tp2, bar_index + n, f_sell_tp2, color=color.new(color.green,  10), width=1, style=line.style_dotted)
+    line.new(bar_index, f_sell_tp3, bar_index + n, f_sell_tp3, color=color.new(color.lime,    5), width=2, style=line.style_dotted)
+    label.new(bar_index + n, f_sell_sl,  "SL  " + str.tostring(f_sell_sl,  "#.##"), color=color.new(color.red,   10), textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index + n, f_sell_tp1, "TP1 " + str.tostring(f_sell_tp1, "#.##"), color=color.new(color.green, 30), textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index + n, f_sell_tp2, "TP2 " + str.tostring(f_sell_tp2, "#.##"), color=color.new(color.green, 10), textcolor=color.white, style=label.style_label_right, size=size.tiny)
+    label.new(bar_index + n, f_sell_tp3, "TP3 " + str.tostring(f_sell_tp3, "#.##"), color=color.new(color.lime,   5), textcolor=color.black, style=label.style_label_right, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── SIGNAL SHAPES
+// ═══════════════════════════════════════════════════════════════════
+
+plotshape(show_signals and buy_prio,                          "BUY Priority ★",  shape.triangleup,   location.belowbar, color.yellow, size=size.large)
+plotshape(show_signals and sell_prio,                         "SELL Priority ★", shape.triangledown,  location.abovebar, color.yellow, size=size.large)
+plotshape(show_signals and buy_exec  and not buy_prio,        "BUY Execute",     shape.triangleup,   location.belowbar, color.lime,   size=size.normal)
+plotshape(show_signals and sell_exec and not sell_prio,       "SELL Execute",    shape.triangledown,  location.abovebar, color.red,    size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── DASHBOARD TABLE
+// ═══════════════════════════════════════════════════════════════════
+
+var table dash = table.new(position.top_right, 2, 16,
+     bgcolor=color.new(color.black, 5),
+     border_color=color.new(color.gray, 40), border_width=1,
+     frame_color=color.new(color.gray, 20), frame_width=1)
+
+c_hdr  = color.new(color.navy, 0)
+c_title = color.new(color.gray, 30)
+c_val  = color.new(color.white, 0)
+c_bull = color.new(color.lime, 0)
+c_bear = color.new(color.red, 0)
+c_neut = color.new(color.gray, 10)
+c_warn = color.new(color.orange, 0)
+
+f_bias_col(string b) => b == "BULLISH" ? c_bull : b == "BEARISH" ? c_bear : c_neut
+
+if show_dashboard and barstate.islast
+    ab     = buy_alert
+    asc    = ab ? bull_score : sell_alert ? bear_score : 0
+    adir   = ab ? "BUY  ▲"  : sell_alert ? "SELL ▼"  : "FLAT"
+    acol   = ab ? c_bull     : sell_alert ? c_bear     : c_neut
+
+    sc_col = asc >= min_score_prio  ? color.yellow :
+             asc >= min_score_trade ? c_bull        :
+             asc >= min_score_alert ? c_warn        : c_bear
+
+    table.cell(dash, 0, 0,  "TWMK XAU INTEL",  bgcolor=c_hdr, text_color=color.white,  text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 0,  session_name + (is_killzone ? " ★" : ""), bgcolor=c_hdr, text_color=is_killzone ? color.yellow : color.white, text_size=size.small)
+
+    table.cell(dash, 0, 1,  "Signal",       text_color=c_title, text_size=size.small)
+    table.cell(dash, 1, 1,  adir,           text_color=acol,    text_size=size.small)
+
+    table.cell(dash, 0, 2,  "Score (TV)",   text_color=c_title, text_size=size.small)
+    table.cell(dash, 1, 2,  str.tostring(asc) + " / 85", text_color=sc_col, text_size=size.small)
+
+    table.cell(dash, 0, 3,  "Macro (+15)",  text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 3,  "-> backend",   text_color=c_warn,  text_size=size.tiny)
+
+    table.cell(dash, 0, 4,  "Structure",    text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 4,  str.tostring(f_score_structure(ab)) + " / 20", text_color=c_val, text_size=size.tiny)
+
+    table.cell(dash, 0, 5,  "EMA Align",    text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 5,  str.tostring(f_score_ema(ab)) + " / 15", text_color=c_val, text_size=size.tiny)
+
+    table.cell(dash, 0, 6,  "Volatility",   text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 6,  str.tostring(f_score_atr()) + " / 10", text_color=c_val, text_size=size.tiny)
+
+    table.cell(dash, 0, 7,  "Session",      text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 7,  str.tostring(f_score_session()) + " / 10", text_color=c_val, text_size=size.tiny)
+
+    table.cell(dash, 0, 8,  "Liq Sweep",    text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 8,  str.tostring(f_score_sweep(ab)) + " / 15", text_color=c_val, text_size=size.tiny)
+
+    table.cell(dash, 0, 9,  "FVG / OB",     text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 9,  str.tostring(f_score_fvg_ob(ab)) + " / 15", text_color=c_val, text_size=size.tiny)
+
+    table.cell(dash, 0, 10, "Market Bias",  text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 10, market_bias,    text_color=f_bias_col(market_bias), text_size=size.tiny)
+
+    table.cell(dash, 0, 11, "ADX",          text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 11, str.tostring(math.round(adx_val, 1)) + (adx_val >= adx_min ? " OK" : " LOW"), text_color=adx_val >= adx_min ? c_bull : c_bear, text_size=size.tiny)
+
+    table.cell(dash, 0, 12, "ATR",          text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 12, str.tostring(math.round(atr, 2)), text_color=c_val, text_size=size.tiny)
+
+    table.cell(dash, 0, 13, "FVG",          text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 13, bull_fvg ? "BULL" : bear_fvg ? "BEAR" : "none", text_color=bull_fvg ? c_bull : bear_fvg ? c_bear : c_neut, text_size=size.tiny)
+
+    table.cell(dash, 0, 14, "Sweep",        text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 14, has_sweep ? sweep_dir : "none", text_color=has_sweep ? c_warn : c_neut, text_size=size.tiny)
+
+    table.cell(dash, 0, 15, "Asian Range",  text_color=c_title, text_size=size.tiny)
+    table.cell(dash, 1, 15, asian_set ? str.tostring(math.round(asian_range_size, 1)) + " pts" : "building", text_color=asian_set ? c_val : c_neut, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════
+// ── ALERT CONDITIONS  (14 alerts)
+// Configure via TradingView Alerts panel.
+// For webhook to Python backend: POST to http://SERVER:8000/signal/process
+// ═══════════════════════════════════════════════════════════════════
+
+alertcondition(buy_prio,                    "TWMK BUY PRIORITY",    "TWMK XAU — BUY PRIORITY | {{ticker}} {{close}}")
+alertcondition(sell_prio,                   "TWMK SELL PRIORITY",   "TWMK XAU — SELL PRIORITY | {{ticker}} {{close}}")
+alertcondition(buy_exec  and not buy_prio,  "TWMK BUY Execute",     "TWMK XAU — BUY signal | {{ticker}} {{close}}")
+alertcondition(sell_exec and not sell_prio, "TWMK SELL Execute",    "TWMK XAU — SELL signal | {{ticker}} {{close}}")
+alertcondition(buy_alert and not buy_exec,  "TWMK BUY Alert",       "TWMK XAU — BUY setup detected | score below execute threshold")
+alertcondition(sell_alert and not sell_exec,"TWMK SELL Alert",      "TWMK XAU — SELL setup detected | score below execute threshold")
+alertcondition(choch_bull,                  "TWMK CHoCH Bullish",   "TWMK XAU — Bullish CHoCH | Structure shift | {{close}}")
+alertcondition(choch_bear,                  "TWMK CHoCH Bearish",   "TWMK XAU — Bearish CHoCH | Structure shift | {{close}}")
+alertcondition(bos_bull and not choch_bull, "TWMK BOS Bullish",     "TWMK XAU — Bullish BOS | {{close}}")
+alertcondition(bos_bear and not choch_bear, "TWMK BOS Bearish",     "TWMK XAU — Bearish BOS | {{close}}")
+alertcondition(sweep_asian_high,            "TWMK Sweep Asian HIGH","TWMK XAU — Asian HIGH swept and rejected | {{close}}")
+alertcondition(sweep_asian_low,             "TWMK Sweep Asian LOW", "TWMK XAU — Asian LOW swept and rejected | {{close}}")
+alertcondition(bull_fvg,                    "TWMK FVG Bullish",     "TWMK XAU — Bullish Fair Value Gap formed | {{close}}")
+alertcondition(bear_fvg,                    "TWMK FVG Bearish",     "TWMK XAU — Bearish Fair Value Gap formed | {{close}}")

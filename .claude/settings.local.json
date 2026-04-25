@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(npx uipro-cli *)",
+      "WebFetch(domain:officialskills.sh)",
+      "Bash(npx skills *)",
+      "Bash(gh auth *)",
+      "Bash(git --version)",
+      "Bash(npm --version)",
+      "Bash(winget install *)"
+    ]
+  }
+}
