@@ -175,6 +175,15 @@ export function SettingsTab() {
         ["news.enabled",                      String(news.enabled)],
         ["news.blackout_before_minutes",      String(news.blackout_before_minutes)],
         ["news.blackout_after_minutes",       String(news.blackout_after_minutes)],
+        // API keys — only send if non-empty (avoid overwriting with blanks)
+        ...(tg.bot_token  ? [["telegram.bot_token",  tg.bot_token]]  : []),
+        ...(tg.chat_id    ? [["telegram.chat_id",    tg.chat_id]]    : []),
+        ...(tw.bearer_token ? [["twitter.bearer_token", tw.bearer_token]] : []),
+        ...(tw.api_key    ? [["twitter.api_key",     tw.api_key]]    : []),
+        ...(tw.api_secret ? [["twitter.api_secret",  tw.api_secret]] : []),
+        ...(tw.enabled !== undefined ? [["twitter.enabled", String(tw.enabled)]] : []),
+        ...(keys.finnhub_key ? [["apis.finnhub_key", keys.finnhub_key]] : []),
+        ...(keys.trading_economics_key ? [["apis.trading_economics_key", keys.trading_economics_key]] : []),
       ];
       for (const [key, value] of updates) {
         await api.updateConfig(key, value);
